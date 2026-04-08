@@ -704,6 +704,27 @@ export default function DecisionPage() {
               </div>
             )}
 
+            {/* Consulting CTA */}
+            {supporterDone && challengerDone && (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-5 mb-6">
+                <h3 className="font-bold text-stone-900 mb-2">想要更深度的分析？</h3>
+                <p className="text-sm text-stone-700 mb-3">
+                  AI分析只是起点。预约1对1深度咨询，我会结合你的具体情况，给出AI覆盖不到的人情世故判断 + 一份可执行的决策memo。
+                </p>
+                <div className="flex items-center gap-3">
+                  <a
+                    href="https://work.weixin.qq.com/kfid/kfc99d2db8aa0e4f10f"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-5 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
+                  >
+                    预约咨询（限时 ¥9.9）
+                  </a>
+                  <span className="text-xs text-stone-500">30分钟 · 微信语音/文字</span>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={handleReset}
