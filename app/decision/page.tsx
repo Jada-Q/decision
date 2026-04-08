@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 type Scores = {
   pain: number;
@@ -18,6 +18,15 @@ type FormData = {
   worst: string;
   regret: string;
   reversible: string;
+};
+
+type HistoryEntry = {
+  id: string;
+  date: string;
+  data: FormData;
+  tendency: string;
+  supporter: string;
+  challenger: string;
 };
 
 const INITIAL_DATA: FormData = {
@@ -38,20 +47,47 @@ const SLIDER_LABELS: { key: keyof Scores; label: string }[] = [
   { key: "conf", label: "对自己能力的信心" },
 ];
 
+const HISTORY_KEY = "decision-history";
+
+function loadHistory(): HistoryEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(entries: HistoryEntry[]) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, 20)));
+}
+
 function getTendency(scores: Scores): { label: string; description: string } {
   const goScore = scores.pain + scores.attract + scores.conf;
   const stayScore = scores.risk + scores.family;
   if (goScore > stayScore + 3) {
-    return { label: "走", description: "基于你的评分，当前痛苦程度高、新选项吸引力强且你对自己有信心，倾向于尝试新选项。" };
+    return {
+      label: "走",
+      description:
+        "基于你的评分，当前痛苦程度高、新选项吸引力强且你对自己有信心，倾向于尝试新选项。",
+    };
   }
   if (stayScore > goScore - 3 && stayScore <= goScore + 3) {
-    return { label: "纠结中", description: "基于你的评分，走和留的力量接近，需要更多信息来做判断。" };
+    return {
+      label: "纠结中",
+      description:
+        "基于你的评分，走和留的力量接近，需要更多信息来做判断。",
+    };
   }
-  return { label: "留", description: "基于你的评分，综合当前痛苦程度、新选项吸引力和个人信心。" };
+  return {
+    label: "留",
+    description:
+      "基于你的评分，综合当前痛苦程度、新选项吸引力和个人信心。",
+  };
 }
 
-function StepIndicator({ step, total }: { step: number; total: number }) {
-  const labels = ["基本情况", "主观评分", "关键问题", "分析结果"];
+function StepIndicator({ step }: { step: number }) {
+  const labels = ["基本情况", "主观评分", "关键问题", "辩论分析"];
   return (
     <div className="flex items-center gap-2 mb-2">
       {labels.map((label, i) => (
@@ -61,19 +97,58 @@ function StepIndicator({ step, total }: { step: number; total: number }) {
           >
             {label}
           </span>
-          {i < total - 1 && <span className="text-stone-300">→</span>}
+          {i < 3 && <span className="text-stone-300">→</span>}
         </div>
       ))}
     </div>
   );
 }
 
+async function streamRole(
+  data: FormData,
+  role: "supporter" | "challenger",
+  onChunk: (text: string) => void,
+  signal: AbortSignal
+) {
+  const res = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...data, role }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    onChunk("分析请求失败，请稍后重试。");
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let result = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    result += decoder.decode(value, { stream: true });
+    onChunk(result);
+  }
+}
+
 export default function DecisionPage() {
   const [step, setStep] = useState(0);
   const [data, setData] = useState<FormData>(INITIAL_DATA);
-  const [aiResult, setAiResult] = useState("");
+  const [supporterText, setSupporterText] = useState("");
+  const [challengerText, setChallengerText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [viewingEntry, setViewingEntry] = useState<HistoryEntry | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const savedRef = useRef(false);
+
+  useEffect(() => {
+    setHistory(loadHistory());
+  }, []);
 
   const updateField = useCallback(
     (field: keyof FormData, value: string) => {
@@ -92,38 +167,62 @@ export default function DecisionPage() {
     []
   );
 
+  const saveToHistory = useCallback(
+    (sText: string, cText: string) => {
+      if (savedRef.current) return;
+      savedRef.current = true;
+      const entry: HistoryEntry = {
+        id: Date.now().toString(),
+        date: new Date().toLocaleDateString("zh-CN"),
+        data,
+        tendency: getTendency(data.scores).label,
+        supporter: sText,
+        challenger: cText,
+      };
+      const updated = [entry, ...loadHistory()].slice(0, 20);
+      saveHistory(updated);
+      setHistory(updated);
+    },
+    [data]
+  );
+
   const runAnalysis = async () => {
     setLoading(true);
-    setAiResult("");
+    setSupporterText("");
+    setChallengerText("");
+    savedRef.current = false;
     abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+
+    let finalSupporter = "";
+    let finalChallenger = "";
 
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        signal: abortRef.current.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        setAiResult("分析请求失败，请稍后重试。");
-        setLoading(false);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let result = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        result += decoder.decode(value, { stream: true });
-        setAiResult(result);
-      }
+      await Promise.all([
+        streamRole(
+          data,
+          "supporter",
+          (text) => {
+            finalSupporter = text;
+            setSupporterText(text);
+          },
+          signal
+        ),
+        streamRole(
+          data,
+          "challenger",
+          (text) => {
+            finalChallenger = text;
+            setChallengerText(text);
+          },
+          signal
+        ),
+      ]);
+      saveToHistory(finalSupporter, finalChallenger);
     } catch (e: unknown) {
       if (e instanceof Error && e.name !== "AbortError") {
-        setAiResult("分析过程出错，请重试。");
+        if (!finalSupporter) setSupporterText("分析出错，请重试。");
+        if (!finalChallenger) setChallengerText("分析出错，请重试。");
       }
     } finally {
       setLoading(false);
@@ -146,8 +245,23 @@ export default function DecisionPage() {
   const handleReset = () => {
     abortRef.current?.abort();
     setData(INITIAL_DATA);
-    setAiResult("");
+    setSupporterText("");
+    setChallengerText("");
     setStep(0);
+  };
+
+  const loadFromHistory = (entry: HistoryEntry) => {
+    setViewingEntry(entry);
+    setShowHistory(false);
+  };
+
+  const continueFromEntry = (entry: HistoryEntry) => {
+    setData(entry.data);
+    setSupporterText(entry.supporter);
+    setChallengerText(entry.challenger);
+    setViewingEntry(null);
+    savedRef.current = true;
+    setStep(3);
   };
 
   const buildClaudeUrl = () => {
@@ -174,10 +288,129 @@ export default function DecisionPage() {
 
   const tendency = getTendency(data.scores);
 
+  // Viewing a history entry
+  if (viewingEntry) {
+    const t = getTendency(viewingEntry.data.scores);
+    return (
+      <div className="min-h-screen bg-stone-50">
+        <div className="max-w-4xl mx-auto px-6 py-12">
+          <button
+            onClick={() => setViewingEntry(null)}
+            className="text-sm text-stone-500 hover:text-stone-900 mb-4"
+          >
+            ← 返回历史
+          </button>
+          <h1 className="text-2xl font-bold mb-2">
+            {viewingEntry.date} 的决策分析
+          </h1>
+          <p className="text-stone-600 mb-6">
+            {viewingEntry.data.current} → {viewingEntry.data.newopt}
+          </p>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+            <span className="font-bold">倾向：{t.label}</span>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 mb-6">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">💪</span>
+                <h3 className="font-bold text-emerald-900">支持者</h3>
+              </div>
+              <div className="text-sm text-emerald-900 whitespace-pre-wrap leading-relaxed">
+                {viewingEntry.supporter}
+              </div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">🔍</span>
+                <h3 className="font-bold text-red-900">挑战者</h3>
+              </div>
+              <div className="text-sm text-red-900 whitespace-pre-wrap leading-relaxed">
+                {viewingEntry.challenger}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => continueFromEntry(viewingEntry)}
+            className="px-6 py-2.5 border border-stone-900 rounded-lg text-stone-900 font-medium hover:bg-stone-900 hover:text-white transition-colors"
+          >
+            基于此重新分析
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // History panel
+  if (showHistory) {
+    return (
+      <div className="min-h-screen bg-stone-50">
+        <div className="max-w-2xl mx-auto px-6 py-12">
+          <div className="flex items-center justify-between mb-6">
+            <h1 className="text-2xl font-bold">历史决策</h1>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="text-sm text-stone-500 hover:text-stone-900"
+            >
+              ← 返回
+            </button>
+          </div>
+
+          {history.length === 0 ? (
+            <p className="text-stone-500">还没有历史记录。</p>
+          ) : (
+            <div className="space-y-3">
+              {history.map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => loadFromHistory(entry)}
+                  className="w-full text-left bg-white border border-stone-200 rounded-lg p-4 hover:border-stone-400 transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-stone-500">{entry.date}</span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        entry.tendency === "走"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : entry.tendency === "留"
+                            ? "bg-stone-100 text-stone-700"
+                            : "bg-amber-100 text-amber-700"
+                      }`}
+                    >
+                      {entry.tendency}
+                    </span>
+                  </div>
+                  <div className="text-stone-900 font-medium truncate">
+                    {entry.data.current}
+                  </div>
+                  <div className="text-sm text-stone-500 truncate">
+                    → {entry.data.newopt}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-stone-50">
-      <div className="max-w-2xl mx-auto px-6 py-12">
-        <StepIndicator step={step} total={4} />
+      <div className={`mx-auto px-6 py-12 ${step === 3 ? "max-w-4xl" : "max-w-2xl"}`}>
+        <div className="flex items-center justify-between mb-4">
+          <StepIndicator step={step} />
+          {history.length > 0 && step === 0 && (
+            <button
+              onClick={() => setShowHistory(true)}
+              className="text-sm text-stone-500 hover:text-stone-900 shrink-0"
+            >
+              历史记录 ({history.length})
+            </button>
+          )}
+        </div>
 
         {/* Step 0: 基本情况 */}
         {step === 0 && (
@@ -325,11 +558,11 @@ export default function DecisionPage() {
           </div>
         )}
 
-        {/* Step 3: 分析结果 */}
+        {/* Step 3: 辩论分析 */}
         {step === 3 && (
           <div>
             <p className="text-sm text-stone-500 mb-1">分析结果</p>
-            <h1 className="text-2xl font-bold mb-6">综合判断</h1>
+            <h1 className="text-2xl font-bold mb-6">双视角辩论</h1>
 
             {/* Score cards */}
             <div className="grid grid-cols-3 gap-4 mb-6">
@@ -358,27 +591,59 @@ export default function DecisionPage() {
               <div className="font-bold text-stone-900 mb-1">
                 倾向：{tendency.label}
               </div>
-              <div className="text-sm text-stone-700">{tendency.description}</div>
+              <div className="text-sm text-stone-700">
+                {tendency.description}
+              </div>
             </div>
 
             <hr className="border-stone-200 mb-6" />
 
-            {/* AI Analysis */}
-            {loading && !aiResult && (
-              <div className="text-stone-500 mb-6">AI 正在分析中...</div>
-            )}
-            {aiResult && (
-              <div className="prose prose-stone max-w-none mb-6 whitespace-pre-wrap text-sm leading-relaxed">
-                {aiResult}
+            {/* Dual debate panels */}
+            <div className="grid md:grid-cols-2 gap-6 mb-6">
+              {/* Supporter */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">💪</span>
+                  <h3 className="font-bold text-emerald-900">支持者</h3>
+                  <span className="text-xs text-emerald-600">
+                    帮你看到改变的价值
+                  </span>
+                </div>
+                {loading && !supporterText && (
+                  <div className="text-emerald-600 text-sm animate-pulse">
+                    正在组织论点...
+                  </div>
+                )}
+                {supporterText && (
+                  <div className="text-sm text-emerald-900 whitespace-pre-wrap leading-relaxed">
+                    {supporterText}
+                  </div>
+                )}
               </div>
-            )}
-            {!loading && !aiResult && (
-              <div className="text-stone-500 mb-6">
-                AI分析暂时不可用，请根据上方评分和你填写的答案自行判断。
-              </div>
-            )}
 
-            <div className="flex gap-3">
+              {/* Challenger */}
+              <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">🔍</span>
+                  <h3 className="font-bold text-red-900">挑战者</h3>
+                  <span className="text-xs text-red-600">
+                    帮你看到隐藏的风险
+                  </span>
+                </div>
+                {loading && !challengerText && (
+                  <div className="text-red-600 text-sm animate-pulse">
+                    正在组织论点...
+                  </div>
+                )}
+                {challengerText && (
+                  <div className="text-sm text-red-900 whitespace-pre-wrap leading-relaxed">
+                    {challengerText}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
               <button
                 onClick={handleReset}
                 className="px-6 py-2.5 border border-stone-300 rounded-lg text-stone-600 hover:bg-stone-100 transition-colors"
@@ -399,8 +664,13 @@ export default function DecisionPage() {
 
         {/* Footer */}
         <div className="mt-12 pt-6 border-t border-stone-200 text-sm text-stone-500 space-y-2">
-          <p>四步流程：基本情况 → 主观评分（5个维度滑条）→ 三个关键问题 → AI生成结构化判断。</p>
-          <p>最后有&quot;在对话中深入讨论&quot;按钮，可以把填写的内容一键带入继续聊。</p>
+          <p>
+            四步流程：基本情况 → 主观评分（5个维度滑条）→ 三个关键问题 →
+            AI双视角辩论分析。
+          </p>
+          <p>
+            两个AI角色（支持者+挑战者）同时分析你的决策，帮你看到硬币的两面。
+          </p>
         </div>
       </div>
     </div>

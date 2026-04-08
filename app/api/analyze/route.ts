@@ -2,13 +2,17 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
-export async function POST(request: Request) {
-  const body = await request.json();
+function buildUserContext(body: {
+  current: string;
+  newopt: string;
+  context: string;
+  scores: { pain: number; attract: number; risk: number; family: number; conf: number };
+  worst: string;
+  regret: string;
+  reversible: string;
+}) {
   const { current, newopt, context, scores, worst, regret, reversible } = body;
-
-  const prompt = `你是一个理性、有同理心的决策顾问。用户正在做一个重要的人生决定，请基于以下信息给出结构化分析。
-
-## 用户信息
+  return `## 用户信息
 
 **当前状态：** ${current}
 **新选项：** ${newopt}
@@ -24,30 +28,68 @@ export async function POST(request: Request) {
 ## 关键问题回答
 - **最坏情况：** ${worst}
 - **80岁回头看会后悔吗：** ${regret}
-- **决定是否可逆：** ${reversible}
+- **决定是否可逆：** ${reversible}`;
+}
 
-## 请输出以下分析
+const SUPPORTER_PROMPT = `你是「支持者」——一个温暖但理性的人生教练。你的任务是帮用户看到改变的可能性和价值。
 
-### 1. 倾向判断
-根据评分和回答，给出「走」或「留」的初步倾向，并解释为什么。
+你不是无脑鼓励，而是基于用户的数据，找到支持「走」的合理论据。如果数据确实不支持走，你也要诚实说明，但仍然帮用户看到积极面。
 
-### 2. 核心矛盾
-指出用户内心最大的矛盾点是什么。
+请基于以下信息，从支持改变的角度分析：
 
-### 3. 被忽略的因素
-用户可能没有考虑到的 2-3 个重要因素。
+{context}
 
-### 4. 决策建议
-给出具体的、可执行的下一步建议（不是"好好想想"这种空话）。
+## 请输出（用第二人称"你"）
 
-### 5. 最坏情况压力测试
-如果最坏情况真的发生了，具体该怎么应对？
+### 你为什么想走
+从评分和回答中提炼用户内心真实的渴望。
 
-用中文回答。语气温和但直接，不要回避难听的真话。`;
+### 这个选择的合理性
+为什么这不是冲动，而是有依据的判断。
+
+### 最坏情况没那么可怕
+对用户提到的最坏情况做压力测试，说明为什么可以承受。
+
+### 具体下一步
+给出2-3个可执行的行动建议。
+
+语气温暖、有力量感。用中文回答。控制在400字以内。`;
+
+const CHALLENGER_PROMPT = `你是「挑战者」——一个冷静犀利的风险分析师。你的任务是帮用户看到可能忽略的风险和盲点。
+
+你不是泼冷水，而是基于用户的数据，指出被情绪遮蔽的风险。如果数据确实支持走，你也要承认，但仍然要指出隐藏的陷阱。
+
+请基于以下信息，从质疑和风险的角度分析：
+
+{context}
+
+## 请输出（用第二人称"你"）
+
+### 你可能在逃避什么
+当前的"痛苦"是真的无法改善，还是换个环境也一样？
+
+### 被吸引力遮蔽的风险
+新选项看起来好，但你没考虑到的代价是什么？
+
+### 最坏情况的真实代价
+不是"能不能接受"，而是"你的家人/关系能不能接受"？
+
+### 如果不走，还有什么选择
+留下来但做出改变的可能性。
+
+语气直接、犀利但不刻薄。用中文回答。控制在400字以内。`;
+
+export async function POST(request: Request) {
+  const body = await request.json();
+  const { role = "supporter" } = body;
+
+  const userContext = buildUserContext(body);
+  const template = role === "challenger" ? CHALLENGER_PROMPT : SUPPORTER_PROMPT;
+  const prompt = template.replace("{context}", userContext);
 
   const stream = client.messages.stream({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 2000,
+    max_tokens: 1200,
     messages: [{ role: "user", content: prompt }],
   });
 
