@@ -1,6 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 
-const client = new Anthropic();
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 function buildUserContext(body: {
   current: string;
@@ -87,21 +87,18 @@ export async function POST(request: Request) {
   const template = role === "challenger" ? CHALLENGER_PROMPT : SUPPORTER_PROMPT;
   const prompt = template.replace("{context}", userContext);
 
-  const stream = client.messages.stream({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 1200,
-    messages: [{ role: "user", content: prompt }],
+  const response = await ai.models.generateContentStream({
+    model: "gemini-2.5-flash",
+    contents: prompt,
   });
 
   const readableStream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
-      for await (const event of stream) {
-        if (
-          event.type === "content_block_delta" &&
-          event.delta.type === "text_delta"
-        ) {
-          controller.enqueue(encoder.encode(event.delta.text));
+      for await (const chunk of response) {
+        const text = chunk.text;
+        if (text) {
+          controller.enqueue(encoder.encode(text));
         }
       }
       controller.close();
@@ -111,7 +108,6 @@ export async function POST(request: Request) {
   return new Response(readableStream, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
-      "Transfer-Encoding": "chunked",
     },
   });
 }
