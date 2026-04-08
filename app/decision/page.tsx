@@ -274,7 +274,9 @@ export default function DecisionPage() {
     setStep(3);
   };
 
-  const buildClaudeUrl = () => {
+  const [copied, setCopied] = useState(false);
+
+  const handleDeepDiscuss = async () => {
     const prompt = `我正在做一个重要决定，想请你帮我深入分析。
 
 当前状态：${data.current}
@@ -293,7 +295,10 @@ export default function DecisionPage() {
 是否可逆：${data.reversible}
 
 请帮我进一步分析这个决定。`;
-    return `https://claude.ai/new?q=${encodeURIComponent(prompt)}`;
+    await navigator.clipboard.writeText(prompt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 3000);
+    window.open("https://claude.ai/new", "_blank");
   };
 
   const tendency = getTendency(data.scores);
@@ -706,15 +711,13 @@ export default function DecisionPage() {
               >
                 重新开始
               </button>
-              <a
-                href={buildClaudeUrl()}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-6 py-2.5 border border-stone-900 rounded-lg text-stone-900 font-medium hover:bg-stone-900 hover:text-white transition-colors inline-flex items-center"
+              <button
+                onClick={handleDeepDiscuss}
+                className="px-6 py-2.5 border border-stone-900 rounded-lg text-stone-900 font-medium hover:bg-stone-900 hover:text-white transition-colors"
               >
-                在对话中深入讨论 ↗
-              </a>
-              <span className="text-xs text-stone-400 self-center">需要 Claude 账号</span>
+                {copied ? "已复制，请在 Claude 中粘贴" : "在对话中深入讨论 ↗"}
+              </button>
+              <span className="text-xs text-stone-400 self-center">自动复制内容并打开 Claude</span>
             </div>
           </div>
         )}
