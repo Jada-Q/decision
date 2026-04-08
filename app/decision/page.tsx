@@ -39,12 +39,12 @@ const INITIAL_DATA: FormData = {
   reversible: "",
 };
 
-const SLIDER_LABELS: { key: keyof Scores; label: string }[] = [
-  { key: "pain", label: "现在有多痛苦" },
-  { key: "attract", label: "新选项的吸引力" },
-  { key: "risk", label: "新选项的风险感" },
-  { key: "family", label: "家庭/关系代价" },
-  { key: "conf", label: "对自己能力的信心" },
+const SLIDER_LABELS: { key: keyof Scores; label: string; low: string; high: string }[] = [
+  { key: "pain", label: "现在有多痛苦", low: "还好", high: "非常痛苦" },
+  { key: "attract", label: "新选项的吸引力", low: "一般", high: "非常吸引" },
+  { key: "risk", label: "新选项的风险感", low: "很安全", high: "风险很大" },
+  { key: "family", label: "家庭/关系代价", low: "几乎没有", high: "代价很大" },
+  { key: "conf", label: "对自己能力的信心", low: "没信心", high: "非常自信" },
 ];
 
 const HISTORY_KEY = "decision-history";
@@ -86,17 +86,19 @@ function getTendency(scores: Scores): { label: string; description: string } {
   };
 }
 
-function StepIndicator({ step }: { step: number }) {
+function StepIndicator({ step, onJump }: { step: number; onJump: (target: number) => void }) {
   const labels = ["基本情况", "主观评分", "关键问题", "辩论分析"];
   return (
     <div className="flex items-center gap-2 mb-2">
       {labels.map((label, i) => (
         <div key={i} className="flex items-center gap-2">
-          <span
-            className={`text-sm ${i === step ? "text-stone-900 font-medium" : "text-stone-400"}`}
+          <button
+            onClick={() => i < step && onJump(i)}
+            disabled={i >= step}
+            className={`text-sm transition-colors ${i === step ? "text-stone-900 font-medium" : i < step ? "text-stone-500 hover:text-stone-900 underline underline-offset-2 cursor-pointer" : "text-stone-400 cursor-default"}`}
           >
             {label}
-          </span>
+          </button>
           {i < 3 && <span className="text-stone-300">→</span>}
         </div>
       ))}
@@ -143,8 +145,14 @@ export default function DecisionPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [viewingEntry, setViewingEntry] = useState<HistoryEntry | null>(null);
+  const [debateTab, setDebateTab] = useState<"supporter" | "challenger">("supporter");
+  const [supporterDone, setSupporterDone] = useState(false);
+  const [challengerDone, setChallengerDone] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const savedRef = useRef(false);
+
+  const canProceedStep0 = data.current.trim() !== "" && data.newopt.trim() !== "" && data.context.trim() !== "";
+  const canProceedStep2 = data.worst.trim() !== "" && data.regret.trim() !== "" && data.reversible.trim() !== "";
 
   useEffect(() => {
     setHistory(loadHistory());
@@ -190,6 +198,8 @@ export default function DecisionPage() {
     setLoading(true);
     setSupporterText("");
     setChallengerText("");
+    setSupporterDone(false);
+    setChallengerDone(false);
     savedRef.current = false;
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
@@ -207,7 +217,7 @@ export default function DecisionPage() {
             setSupporterText(text);
           },
           signal
-        ),
+        ).then(() => setSupporterDone(true)),
         streamRole(
           data,
           "challenger",
@@ -216,7 +226,7 @@ export default function DecisionPage() {
             setChallengerText(text);
           },
           signal
-        ),
+        ).then(() => setChallengerDone(true)),
       ]);
       saveToHistory(finalSupporter, finalChallenger);
     } catch (e: unknown) {
@@ -401,8 +411,8 @@ export default function DecisionPage() {
     <div className="min-h-screen bg-stone-50">
       <div className={`mx-auto px-6 py-12 ${step === 3 ? "max-w-4xl" : "max-w-2xl"}`}>
         <div className="flex items-center justify-between mb-4">
-          <StepIndicator step={step} />
-          {history.length > 0 && step === 0 && (
+          <StepIndicator step={step} onJump={setStep} />
+          {history.length > 0 && (
             <button
               onClick={() => setShowHistory(true)}
               className="text-sm text-stone-500 hover:text-stone-900 shrink-0"
@@ -415,35 +425,37 @@ export default function DecisionPage() {
         {/* Step 0: 基本情况 */}
         {step === 0 && (
           <div>
+            <h1 className="text-2xl font-bold mb-2">AI 决策辩论</h1>
+            <p className="text-stone-500 mb-6">填写你的情况，两个 AI 角色（支持者 + 挑战者）会同时分析你的决策，帮你看到硬币的两面。</p>
             <p className="text-sm text-stone-500 mb-1">第1步 · 基本情况</p>
-            <h1 className="text-2xl font-bold mb-8">描述当前处境和新选项</h1>
+            <h2 className="text-xl font-bold mb-6">描述当前处境和新选项</h2>
 
-            <label className="block text-sm text-stone-700 mb-2">
+            <label className="block text-sm text-stone-700 mb-1">
               现在的工作/状态（一句话）
             </label>
+            <p className="text-xs text-stone-400 mb-2">例：芯片公司，被老板过度压榨，无成长空间，薪资一般</p>
             <textarea
-              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-stone-400"
-              placeholder="例：芯片公司，被老板过度压榨，无成长空间，薪资一般"
+              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[80px] focus:outline-none focus:ring-2 focus:ring-stone-400"
               value={data.current}
               onChange={(e) => updateField("current", e.target.value)}
             />
 
-            <label className="block text-sm text-stone-700 mb-2">
+            <label className="block text-sm text-stone-700 mb-1">
               新选项是什么（一句话）
             </label>
+            <p className="text-xs text-stone-400 mb-2">例：去上海智元机器人，AI方向，薪资+40%，需要离开家人</p>
             <textarea
-              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-stone-400"
-              placeholder="例：去上海智元机器人，AI方向，薪资+40%，需要离开家人"
+              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[80px] focus:outline-none focus:ring-2 focus:ring-stone-400"
               value={data.newopt}
               onChange={(e) => updateField("newopt", e.target.value)}
             />
 
-            <label className="block text-sm text-stone-700 mb-2">
+            <label className="block text-sm text-stone-700 mb-1">
               你/当事人的基本情况（年龄、家庭、专业背景）
             </label>
+            <p className="text-xs text-stone-400 mb-2">例：38岁，妻子和女儿在杭州，芯片技术背景，喜欢AI</p>
             <textarea
-              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-stone-400"
-              placeholder="例：38岁，妻子和女儿在杭州，芯片技术背景，喜欢AI"
+              className="w-full border border-stone-300 rounded-lg p-4 mb-6 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[80px] focus:outline-none focus:ring-2 focus:ring-stone-400"
               value={data.context}
               onChange={(e) => updateField("context", e.target.value)}
             />
@@ -451,11 +463,15 @@ export default function DecisionPage() {
             <div className="flex gap-3">
               <button
                 onClick={handleNext}
-                className="px-6 py-2.5 border border-stone-900 rounded-lg text-stone-900 font-medium hover:bg-stone-900 hover:text-white transition-colors"
+                disabled={!canProceedStep0}
+                className={`px-6 py-2.5 border rounded-lg font-medium transition-colors ${canProceedStep0 ? "border-stone-900 text-stone-900 hover:bg-stone-900 hover:text-white" : "border-stone-200 text-stone-300 cursor-not-allowed"}`}
               >
                 下一步 →
               </button>
             </div>
+            {!canProceedStep0 && (data.current || data.newopt || data.context) && (
+              <p className="text-sm text-amber-600 mt-2">请填写所有字段后继续</p>
+            )}
           </div>
         )}
 
@@ -468,22 +484,24 @@ export default function DecisionPage() {
             </h1>
 
             <div className="space-y-6">
-              {SLIDER_LABELS.map(({ key, label }) => (
-                <div key={key} className="flex items-center gap-4">
-                  <span className="w-40 text-sm text-stone-700 shrink-0">
-                    {label}
-                  </span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={10}
-                    value={data.scores[key]}
-                    onChange={(e) => updateScore(key, Number(e.target.value))}
-                    className="flex-1 accent-stone-700 h-2"
-                  />
-                  <span className="w-8 text-right font-medium text-stone-900">
-                    {data.scores[key]}
-                  </span>
+              {SLIDER_LABELS.map(({ key, label, low, high }) => (
+                <div key={key}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-stone-700">{label}</span>
+                    <span className="text-lg font-bold text-stone-900">{data.scores[key]}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-stone-400 w-16 shrink-0">{low}</span>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      value={data.scores[key]}
+                      onChange={(e) => updateScore(key, Number(e.target.value))}
+                      className="flex-1 accent-stone-700 h-2"
+                    />
+                    <span className="text-xs text-stone-400 w-16 text-right shrink-0">{high}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -550,11 +568,15 @@ export default function DecisionPage() {
               </button>
               <button
                 onClick={handleNext}
-                className="px-6 py-2.5 border border-stone-900 rounded-lg text-stone-900 font-medium hover:bg-stone-900 hover:text-white transition-colors"
+                disabled={!canProceedStep2}
+                className={`px-6 py-2.5 border rounded-lg font-medium transition-colors ${canProceedStep2 ? "border-stone-900 text-stone-900 hover:bg-stone-900 hover:text-white" : "border-stone-200 text-stone-300 cursor-not-allowed"}`}
               >
                 生成分析 ↗
               </button>
             </div>
+            {!canProceedStep2 && (data.worst || data.regret || data.reversible) && (
+              <p className="text-sm text-amber-600 mt-2">请填写所有字段后继续</p>
+            )}
           </div>
         )}
 
@@ -598,10 +620,26 @@ export default function DecisionPage() {
 
             <hr className="border-stone-200 mb-6" />
 
+            {/* Mobile: tab switcher */}
+            <div className="flex md:hidden gap-2 mb-4">
+              <button
+                onClick={() => setDebateTab("supporter")}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${debateTab === "supporter" ? "bg-emerald-100 text-emerald-900 border border-emerald-300" : "bg-stone-100 text-stone-500"}`}
+              >
+                💪 支持者
+              </button>
+              <button
+                onClick={() => setDebateTab("challenger")}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${debateTab === "challenger" ? "bg-red-100 text-red-900 border border-red-300" : "bg-stone-100 text-stone-500"}`}
+              >
+                🔍 挑战者
+              </button>
+            </div>
+
             {/* Dual debate panels */}
             <div className="grid md:grid-cols-2 gap-6 mb-6">
               {/* Supporter */}
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5">
+              <div className={`bg-emerald-50 border border-emerald-200 rounded-xl p-5 ${debateTab !== "supporter" ? "hidden md:block" : ""}`}>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-lg">💪</span>
                   <h3 className="font-bold text-emerald-900">支持者</h3>
@@ -619,10 +657,13 @@ export default function DecisionPage() {
                     {supporterText}
                   </div>
                 )}
+                {supporterDone && (
+                  <div className="mt-3 pt-3 border-t border-emerald-200 text-xs text-emerald-500">分析完成</div>
+                )}
               </div>
 
               {/* Challenger */}
-              <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+              <div className={`bg-red-50 border border-red-200 rounded-xl p-5 ${debateTab !== "challenger" ? "hidden md:block" : ""}`}>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-lg">🔍</span>
                   <h3 className="font-bold text-red-900">挑战者</h3>
@@ -640,8 +681,23 @@ export default function DecisionPage() {
                     {challengerText}
                   </div>
                 )}
+                {challengerDone && (
+                  <div className="mt-3 pt-3 border-t border-red-200 text-xs text-red-500">分析完成</div>
+                )}
               </div>
             </div>
+
+            {/* Decision closure */}
+            {supporterDone && challengerDone && (
+              <div className="bg-stone-100 rounded-xl p-5 mb-6">
+                <h3 className="font-bold text-stone-900 mb-3">听完两方观点，你的决定是？</h3>
+                <p className="text-sm text-stone-500 mb-3">写下来帮你固化想法，也会保存到历史记录。</p>
+                <textarea
+                  className="w-full border border-stone-300 rounded-lg p-3 bg-white text-stone-900 placeholder-stone-400 resize-y min-h-[80px] focus:outline-none focus:ring-2 focus:ring-stone-400 text-sm"
+                  placeholder="例：决定去试试，最坏就是两年后回来，但至少不后悔。"
+                />
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-3">
               <button
@@ -658,6 +714,7 @@ export default function DecisionPage() {
               >
                 在对话中深入讨论 ↗
               </a>
+              <span className="text-xs text-stone-400 self-center">需要 Claude 账号</span>
             </div>
           </div>
         )}
